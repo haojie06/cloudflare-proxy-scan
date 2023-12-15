@@ -5,8 +5,10 @@ use std::{
     fs::File,
     io::Write,
     net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::task::JoinSet;
 
 const CDN_DOMAIN: &str = "v2ex.com";
 #[derive(Parser, Debug)]
@@ -16,8 +18,8 @@ struct Args {
     target: IpNet,
     #[arg(long, default_value = "3")]
     timeout: u64,
-    // #[arg(short, long, default_value = "5")]
-    // concurrent: i32,
+    #[arg(short, long, default_value = "5")]
+    concurrency: usize,
 }
 
 async fn check_if_cf_proxy(ip: IpAddr, timeout: u64) -> Result<bool, ReqwestError> {
@@ -43,31 +45,41 @@ async fn check_if_cf_proxy(ip: IpAddr, timeout: u64) -> Result<bool, ReqwestErro
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let mut proxy_ips: Vec<String> = Vec::new();
     let total_ips = args.target.hosts().count();
+    let proxy_ips: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let mut checked_ips = 0;
     println!("Checking {} IPs", total_ips);
+    let mut task_set = JoinSet::new();
     for ip in args.target.hosts() {
         checked_ips += 1;
         println!("Starting to check {} ({}/{})", ip, checked_ips, total_ips);
-        match check_if_cf_proxy(ip, args.timeout).await {
-            Ok(true) => {
-                println!("{} is a cloudflare proxy", ip);
-                proxy_ips.push(ip.to_string());
+        let proxy_ips_clone = Arc::clone(&proxy_ips);
+        task_set.spawn(async move {
+            match check_if_cf_proxy(ip, args.timeout).await {
+                Ok(true) => {
+                    println!("{} is a cloudflare proxy", ip);
+                    let mut proxy_ips = proxy_ips_clone.lock().unwrap();
+                    proxy_ips.push(ip.to_string());
+                }
+                Ok(false) => {
+                    println!("{} is not a cloudflare proxy", ip);
+                }
+                // 忽略ReqwestError错误
+                Err(_) => {
+                    println!("{} is not a cloudflare proxy", ip);
+                }
             }
-            Ok(false) => {
-                println!("{} is not a cloudflare proxy", ip);
-            }
-            // 忽略ReqwestError错误
-            Err(_) => {
-                println!("{} is not a cloudflare proxy", ip);
-            }
+        });
+        if task_set.len() >= args.concurrency || checked_ips == total_ips {
+            let _ = task_set.join_next().await.expect("task failed");
         }
     }
+
+    let proxy_ips = proxy_ips.lock().unwrap();
     println!(
         "Checked {} IPs, found {} proxy ip",
+        proxy_ips.len(),
         args.target.hosts().count(),
-        proxy_ips.len()
     );
     let mut file = File::create("proxy_ips.txt").unwrap();
     file.write_all(proxy_ips.join("\n").as_bytes()).unwrap();
