@@ -1,8 +1,14 @@
 use clap::Parser;
 use ipnet::IpNet;
 use reqwest::{self, header, Error as ReqwestError};
-use std::{fs::File, io::Write, net::IpAddr, time::Duration};
+use std::{
+    fs::File,
+    io::Write,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 
+const CDN_DOMAIN: &str = "v2ex.com";
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -10,17 +16,20 @@ struct Args {
     target: IpNet,
     #[arg(long, default_value = "3")]
     timeout: u64,
+    // #[arg(short, long, default_value = "5")]
+    // concurrent: i32,
 }
 
 async fn check_if_cf_proxy(ip: IpAddr, timeout: u64) -> Result<bool, ReqwestError> {
     let client = reqwest::Client::builder()
+        .resolve(CDN_DOMAIN, SocketAddr::new(ip, 443))
         .timeout(Duration::from_secs(timeout))
         .danger_accept_invalid_certs(true)
         .build()?;
 
     let res = client
-        .get(format!("http://{}/cdn-cgi/trace", ip)) // TODO check both http and https
-        .header(header::HOST, "v2ex.com")
+        .get(format!("https://{}/cdn-cgi/trace", CDN_DOMAIN)) // TODO check both http and https
+        .header(header::HOST, CDN_DOMAIN)
         .send()
         .await?;
     let response_text = res.text().await?;
@@ -43,15 +52,15 @@ async fn main() {
         println!("Starting to check {} ({}/{})", ip, checked_ips, total_ips);
         match check_if_cf_proxy(ip, args.timeout).await {
             Ok(true) => {
-                println!("{} is behind CDN", ip);
+                println!("{} is a cloudflare proxy", ip);
                 proxy_ips.push(ip.to_string());
             }
             Ok(false) => {
-                println!("{} is not behind CDN", ip);
+                println!("{} is not a cloudflare proxy", ip);
             }
             // 忽略ReqwestError错误
             Err(_) => {
-                println!("{} is not behind CDN", ip);
+                println!("{} is not a cloudflare proxy", ip);
             }
         }
     }
