@@ -78,8 +78,8 @@ async fn main() {
     let proxy_ips = proxy_ips.lock().unwrap();
     println!(
         "Checked {} IPs, found {} proxy ip",
-        proxy_ips.len(),
         args.target.hosts().count(),
+        proxy_ips.len(),
     );
     let mut file = File::create("proxy_ips.txt").unwrap();
     file.write_all(proxy_ips.join("\n").as_bytes()).unwrap();
