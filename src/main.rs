@@ -1,24 +1,31 @@
 use clap::Parser;
 use ipnet::IpNet;
 use reqwest::{self, header, Error as ReqwestError};
-use std::{fs::File, io::Write, net::IpAddr};
+use std::{fs::File, io::Write, net::IpAddr, time::Duration};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
     target: IpNet,
+    #[arg(long, default_value = "3")]
+    timeout: u64,
 }
 
-async fn check_if_cf_proxy(ip: IpAddr) -> Result<bool, ReqwestError> {
-    let client = reqwest::Client::new();
+async fn check_if_cf_proxy(ip: IpAddr, timeout: u64) -> Result<bool, ReqwestError> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout))
+        .danger_accept_invalid_certs(true)
+        .build()?;
 
     let res = client
-        .get(format!("https://{}", ip)) // TODO check both http and https
+        .get(format!("http://{}/cdn-cgi/trace", ip)) // TODO check both http and https
         .header(header::HOST, "v2ex.com")
         .send()
         .await?;
-    if res.text().await?.contains("h=v2ex.com") {
+    let response_text = res.text().await?;
+    // println!("{}", response_text);
+    if response_text.contains("h=v2ex.com") {
         return Ok(true);
     }
     Ok(false)
@@ -34,7 +41,7 @@ async fn main() {
     for ip in args.target.hosts() {
         checked_ips += 1;
         println!("Starting to check {} ({}/{})", ip, checked_ips, total_ips);
-        match check_if_cf_proxy(ip).await {
+        match check_if_cf_proxy(ip, args.timeout).await {
             Ok(true) => {
                 println!("{} is behind CDN", ip);
                 proxy_ips.push(ip.to_string());
@@ -42,9 +49,9 @@ async fn main() {
             Ok(false) => {
                 println!("{} is not behind CDN", ip);
             }
-            Err(e) => {
-                println!("Failed to check {}", ip);
-                println!("Error: {}", e);
+            // 忽略ReqwestError错误
+            Err(_) => {
+                println!("{} is not behind CDN", ip);
             }
         }
     }
