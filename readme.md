@@ -1,0 +1,1 @@
+This program was written solely for learning Rust, please do not misuse it.
